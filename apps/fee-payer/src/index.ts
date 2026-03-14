@@ -15,7 +15,6 @@ import {
 	captureEvent,
 	getRequestContext,
 } from './lib/posthog.js'
-import { blockSignTransactionMiddleware } from './lib/block-sign-transaction.js'
 import { rateLimitMiddleware } from './lib/rate-limit.js'
 import { getUsage } from './lib/usage.js'
 
@@ -88,7 +87,7 @@ app.get(
 	},
 )
 
-app.all('*', blockSignTransactionMiddleware, rateLimitMiddleware, async (c) => {
+app.all('*', rateLimitMiddleware, async (c) => {
 	const requestContext = getRequestContext(c.req.raw)
 
 	const handler = Handler.feePayer({

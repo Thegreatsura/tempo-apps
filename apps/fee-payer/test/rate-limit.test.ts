@@ -46,23 +46,4 @@ describe('rate-limit middleware', () => {
 		expect(response.status).toBe(200)
 	})
 
-	it('blocks eth_signTransaction before rate limiting runs', async () => {
-		const response = await SELF.fetch('https://fee-payer.test/', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				jsonrpc: '2.0',
-				id: 1,
-				method: 'eth_signTransaction',
-				params: [{ to: '0x0000000000000000000000000000000000000000' }],
-			}),
-		})
-
-		expect(response.status).toBe(403)
-		const data = (await response.json()) as {
-			error?: { code: number; message: string }
-		}
-		expect(data.error?.code).toBe(-32601)
-		expect(data.error?.message).toBe('Method not supported')
-	})
 })

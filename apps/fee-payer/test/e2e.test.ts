@@ -137,13 +137,11 @@ describe('fee-payer integration', () => {
 				}),
 			})
 
-			expect(response.status).toBe(403)
+			expect(response.status).toBe(200)
 			const data = (await response.json()) as {
-				error?: { code: number; message: string }
+				error?: { code: number; name: string }
 			}
 			expect(data.error).toBeDefined()
-			expect(data.error?.code).toBe(-32601)
-			expect(data.error?.message).toBe('Method not supported')
 		})
 
 		it('handles CORS preflight requests', async () => {
