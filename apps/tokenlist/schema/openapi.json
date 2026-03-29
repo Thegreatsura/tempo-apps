@@ -149,7 +149,8 @@
 											"logo_uri": "https://esm.sh/gh/tempoxyz/tokenlist/data/42431/icons/pathusd.svg",
 											"extensions": {
 												"chain": "tempo",
-												"label": "pathUSD"
+												"label": "pathUSD",
+												"coingeckoId": "pathusd"
 											}
 										}
 									]
@@ -667,17 +668,16 @@
 			"ExtensionMap": {
 				"type": "object",
 				"maxProperties": 10,
-				"additionalProperties": {
-					"type": "string",
-					"minLength": 1,
-					"maxLength": 1000,
-					"pattern": "^.+$"
-				},
+				"additionalProperties": true,
 				"description": "Object containing arbitrary or vendor-specific token metadata",
 				"example": {
 					"chain": "tempo",
 					"label": "PathUSD",
-					"inlined": "%3Csvg..."
+					"coingeckoId": "pathusd",
+					"bridgeInfo": {
+						"sourceChainId": 1,
+						"sourceAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+					}
 				}
 			}
 		}
