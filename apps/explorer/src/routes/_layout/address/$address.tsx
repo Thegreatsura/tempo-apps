@@ -493,6 +493,7 @@ export const Route = createFileRoute('/_layout/address/$address')({
 				txCount,
 				accountType,
 				lastActive,
+				contractName: loaderData?.contractInfo?.name,
 			})
 		}
 
