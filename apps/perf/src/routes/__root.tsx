@@ -30,6 +30,7 @@ export const Route = createRootRouteWithContext<{
 			},
 		],
 		links: [
+			{ rel: 'icon', type: 'image/png', href: '/favicon.png' },
 			{
 				rel: 'preload',
 				href: '/fonts/satoshi/Satoshi-Variable.woff2',
@@ -83,7 +84,7 @@ function RootDocument() {
 function Banner(): React.JSX.Element {
 	return (
 		<div className="mt-4 rounded-lg border border-negative/40 bg-negative/10 px-4 py-2.5 text-center text-[13px] font-medium text-negative">
-			🚧 Under development — all data shown is mock data
+			🚧 Under development
 		</div>
 	)
 }
