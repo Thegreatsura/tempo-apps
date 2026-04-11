@@ -434,6 +434,11 @@ function createDetectors(
 				return {
 					type: 'zone batch submitted',
 					parts: [{ type: 'action', value: `Submit ${zoneName} Batch` }],
+					note: [
+						['Processed Deposits', { type: 'text', value: '' }],
+						['Next Block', { type: 'text', value: '' }],
+						['Withdrawal Queue', { type: 'text', value: '' }],
+					],
 				}
 			}
 
