@@ -58,10 +58,11 @@ catalog:
   eruda: ^3.4.3
   esbuild: ^0.28.0
   globals: ^17.4.0
-  hono: ^4.12.14
+  hono: ^4.12.22
   hono-rate-limiter: ^0.5.3
   idxs: ^0.0.6
   kysely: ^0.28.15
+  midcut: ^0.2.0
   ox: ^0.14.20
   prool: ^0.2.4
   react: ^19.2.5
@@ -93,6 +94,7 @@ enablePrePostScripts: true
 ignoredBuiltDependencies:
   - '@sentry/cli'
   - bufferutil
+  - cadent
   - cbor-extract
   - cpu-features
   - protobufjs

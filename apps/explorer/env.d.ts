@@ -2,7 +2,6 @@ interface EnvironmentVariables {
 	readonly DATADOG_APPLICATION_ID: string | undefined
 	readonly DATADOG_CLIENT_TOKEN: string | undefined
 	readonly DATADOG_SITE: string | undefined
-	readonly TIDX_BASIC_AUTH: string | undefined
 	readonly SENTRY_AUTH_TOKEN: string | undefined
 	readonly SENTRY_ORG: string | undefined
 	readonly SENTRY_PROJECT: string | undefined
@@ -21,8 +20,6 @@ interface EnvironmentVariables {
 	readonly VITE_DATADOG_TRACE_SAMPLE_RATE: string | undefined
 
 	readonly VITE_TEMPO_ENV: 'testnet' | 'devnet' | 'nextfork' | 'mainnet'
-
-	readonly TEMPO_RPC_KEY: string
 }
 
 interface ImportMetaEnv extends EnvironmentVariables {}
