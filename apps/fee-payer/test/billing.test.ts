@@ -4,12 +4,12 @@ import {
 	buildSponsorshipIntentMessage,
 	hashApiKey,
 } from '../src/lib/billing.js'
+import { pathUsd } from '../src/lib/consts.js'
 import { tempoChain } from './helpers.js'
 
 const apiKey = 'tp_test_key'
 const sender = '0x0000000000000000000000000000000000000003'
 const sponsorAddress = '0x0000000000000000000000000000000000000004'
-const feeToken = '0x20c0000000000000000000000000000000000000'
 const target = '0x0000000000000000000000000000000000000005'
 const signedAt = '2026-06-20T12:00:00.000Z'
 const attributionKey = 'privy-app-123'
@@ -49,7 +49,7 @@ function fillResponse(tx = {}) {
 				maxPriorityFeePerGas: '0x1',
 				nonce: '0x0',
 				calls: [{ to: target, value: '0x0', data: '0x' }],
-				feeToken,
+				feeToken: pathUsd,
 				feePayerSignature,
 				...tx,
 			},
@@ -178,7 +178,7 @@ describe('billing sponsorship intents', () => {
 			authorizationList: [],
 			calls: [{ to: target, value: 0n, data: '0x' }],
 			chainId: tempoChain.id,
-			feeToken,
+			feeToken: pathUsd,
 			gas: 0xd492n,
 			maxFeePerGas: 0x4a817c800n,
 			maxPriorityFeePerGas: 0n,
