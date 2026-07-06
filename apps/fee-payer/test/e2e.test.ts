@@ -13,6 +13,15 @@ import {
 	testMnemonic,
 } from './helpers.js'
 
+const sponsorAccount = Account.fromSecp256k1(
+	Mnemonic.toPrivateKey(testMnemonic, {
+		as: 'Hex',
+		path: Mnemonic.path({ account: 0 }),
+	}),
+)
+const betaUsd = '0x20c0000000000000000000000000000000000002' as const
+const thetaUsd = '0x20c0000000000000000000000000000000000003' as const
+
 function createFeePayerTransportWithSpy() {
 	const requests: Array<{ method: string; params: unknown }> = []
 
@@ -48,13 +57,6 @@ function createFeePayerTransportWithSpy() {
 
 // Mint liquidity for fee tokens.
 beforeAll(async () => {
-	const sponsorAccount = Account.fromSecp256k1(
-		Mnemonic.toPrivateKey(testMnemonic, {
-			as: 'Hex',
-			path: Mnemonic.path({ account: 0 }),
-		}),
-	)
-
 	const client = createClient({
 		account: sponsorAccount,
 		chain: tempoChain,
@@ -230,6 +232,60 @@ describe('fee-payer integration', () => {
 			expect(sponsorshipRequests).toHaveLength(1)
 			expect(sponsorshipRequests[0].method).toBe('eth_fillTransaction')
 			expect(sponsorshipRequests[0].params).toBeDefined()
+		})
+
+		it('sponsors a betaUSD transfer while the sponsor prefers thetaUSD', async () => {
+			const sponsorClient = createClient({
+				account: sponsorAccount,
+				chain: tempoChain,
+				transport: http(env.TEMPO_RPC_URL),
+			})
+
+			const account = createTestAccount()
+			const recipient = createTestAccount()
+
+			// ThetaUSD simulates a sponsor preference that previously overrode sponsored TIP-20 fee settlement.
+			await Actions.fee.setUserTokenSync(sponsorClient, {
+				account: sponsorAccount,
+				token: thetaUsd,
+				nonceKey: 'expiring',
+			})
+
+			await Actions.token.transferSync(sponsorClient, {
+				account: sponsorAccount,
+				token: betaUsd,
+				to: account.address,
+				amount: parseUnits('1', 6),
+				nonceKey: 'expiring',
+			})
+
+			const { transport: feePayerTransport } = createFeePayerTransportWithSpy()
+			const client = createClient({
+				account,
+				chain: tempoChain,
+				transport: withRelay(tempoTransport(), feePayerTransport, {
+					policy: 'sign-and-broadcast',
+				}),
+			})
+
+			const amount = parseUnits('0.25', 6)
+			const { receipt } = await Actions.token.transferSync(client, {
+				feePayer: true,
+				token: betaUsd,
+				to: recipient.address,
+				amount,
+			})
+
+			expect(receipt.status).toBe('success')
+			expect(receipt.from.toLowerCase()).toBe(account.address.toLowerCase())
+			expect(receipt.feePayer?.toLowerCase()).toBe(sponsorAddress.toLowerCase())
+			expect(receipt.feeToken?.toLowerCase()).toBe(pathUsd.toLowerCase())
+
+			const balance = await Actions.token.getBalance(sponsorClient, {
+				token: betaUsd,
+				account: recipient.address,
+			})
+			expect(balance).toBe(amount)
 		})
 	})
 })
