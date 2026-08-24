@@ -87,4 +87,20 @@ describe('activitiesToKnownEvents', () => {
 			},
 		])
 	})
+
+	test.each([
+		['private-assets-deposited', 'Private Zone Deposit'],
+		['private-assets-redeemed', 'Private Zone Withdrawal'],
+	])('simplifies %s', (type, action) => {
+		expect(
+			activitiesToKnownEvents([
+				{
+					id: 'activity-1',
+					title: 'Low-level private activity',
+					type,
+					data: { actionId: `0x${'1'.repeat(64)}` },
+				},
+			]),
+		).toEqual([{ type, parts: [{ type: 'action', value: action }] }])
+	})
 })
