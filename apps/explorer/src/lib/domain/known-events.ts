@@ -2863,6 +2863,9 @@ function decodeZonePortalCall(
 
 	switch (functionName) {
 		case 'deposit': {
+			if (typeof args[1] === 'bigint')
+				return decodeEncryptedZoneDeposit(args, zoneName)
+
 			const [token, recipient, amount, memo, refundRecipient] = args as [
 				Address.Address,
 				Address.Address,
@@ -2887,26 +2890,8 @@ function decodeZonePortalCall(
 				note,
 			}
 		}
-		case 'depositEncrypted': {
-			const [token, amount, keyIndex, _encrypted, refundRecipient] = args as [
-				Address.Address,
-				bigint,
-				bigint,
-				unknown,
-				Address.Address,
-			]
-			return {
-				type: 'zone encrypted deposit',
-				parts: [
-					{ type: 'action', value: `Encrypted Deposit to ${zoneName}` },
-					{ type: 'amount', value: { token, value: amount } },
-				],
-				note: [
-					['Key Index', { type: 'number', value: keyIndex }],
-					['Refund Recipient', { type: 'account', value: refundRecipient }],
-				],
-			}
-		}
+		case 'depositEncrypted':
+			return decodeEncryptedZoneDeposit(args, zoneName)
 		case 'pause':
 			return {
 				type: 'zone portal paused',
@@ -2945,6 +2930,30 @@ function decodeZonePortalCall(
 		}
 		default:
 			return null
+	}
+}
+
+function decodeEncryptedZoneDeposit(
+	args: readonly unknown[],
+	zoneName: string,
+): KnownEvent {
+	const [token, amount, keyIndex, _encrypted, refundRecipient] = args as [
+		Address.Address,
+		bigint,
+		bigint,
+		unknown,
+		Address.Address,
+	]
+	return {
+		type: 'zone encrypted deposit',
+		parts: [
+			{ type: 'action', value: `Encrypted Deposit to ${zoneName}` },
+			{ type: 'amount', value: { token, value: amount } },
+		],
+		note: [
+			['Key Index', { type: 'number', value: keyIndex }],
+			['Refund Recipient', { type: 'account', value: refundRecipient }],
+		],
 	}
 }
 
