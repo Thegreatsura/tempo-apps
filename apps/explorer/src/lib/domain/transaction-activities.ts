@@ -115,6 +115,7 @@ function vaultActivityEvent(activity: TransactionActivity): KnownEvent | null {
 		'assets-withdrawn',
 		'private-shares-redeemed',
 		'shares-redeemed',
+		'shares-redemption-finalized',
 	].includes(activity.type)
 	if (!isDeposit && !isWithdrawal) return null
 	const [sourceAmount, sourceToken, destinationAmount, destinationToken] =

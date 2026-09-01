@@ -179,6 +179,46 @@ describe('activitiesToKnownEvents', () => {
 		])
 	})
 
+	test('maps a finalized Earn redemption into a Vault Withdrawal', () => {
+		expect(
+			activitiesToKnownEvents([
+				{
+					id: 'activity-1',
+					title: 'Shares redemption finalized',
+					type: 'shares-redemption-finalized',
+					data: {
+						assets: '49999',
+						shares: '49999',
+						assetToken: '0x20c0000000000000000000000000000000000001',
+						shareToken: '0x20c0000000000000000000000000000000000002',
+					},
+				},
+			]),
+		).toEqual([
+			{
+				type: 'shares-redemption-finalized',
+				parts: [
+					{ type: 'action', value: 'Vault Withdrawal' },
+					{
+						type: 'amount',
+						value: {
+							value: 49999n,
+							token: '0x20c0000000000000000000000000000000000002',
+						},
+					},
+					{ type: 'text', value: 'for' },
+					{
+						type: 'amount',
+						value: {
+							value: 49999n,
+							token: '0x20c0000000000000000000000000000000000001',
+						},
+					},
+				],
+			},
+		])
+	})
+
 	test.each([
 		[
 			'private-assets-deposited',
