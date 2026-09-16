@@ -15,6 +15,7 @@ import { getFeeBreakdown } from '#lib/domain/receipt'
 import * as Tip20 from '#lib/domain/tip20'
 import { withImmutableDataCache } from '#lib/server/immutable-data-cache'
 import { getTempoChain, getWagmiConfig } from '#wagmi.config.ts'
+import type { KeyAuthorization } from '#lib/domain/access-key'
 
 const transferTopic = toEventSelector(
 	'event Transfer(address indexed, address indexed, uint256)',
@@ -46,6 +47,29 @@ async function fetchTxDataUncached(params: { hash: Hex.Hex }) {
 		transaction,
 		getTokenMetadata,
 	})
+	// Wagmi's mixed-chain return type omits Tempo's formatted extension fields.
+	const keyAuthorization =
+		'keyAuthorization' in transaction
+			? (transaction.keyAuthorization as KeyAuthorization | null)
+			: undefined
+	const keyTokenMetadata: Record<
+		string,
+		Pick<Tip20.Metadata, 'decimals' | 'symbol'>
+	> = {}
+	await Promise.all(
+		(keyAuthorization?.limits ?? []).map(async ({ token }) => {
+			const metadata =
+				getTokenMetadata(token) ??
+				(await Tip20.metadataForTokens([token])
+					.then((getMetadata) => getMetadata(token))
+					.catch(() => undefined))
+			if (metadata)
+				keyTokenMetadata[token.toLowerCase()] = {
+					decimals: metadata.decimals,
+					symbol: metadata.symbol,
+				}
+		}),
+	)
 
 	const knownCalls = decodeKnownTransactionCalls(transaction, receipt.status)
 
@@ -107,6 +131,8 @@ async function fetchTxDataUncached(params: { hash: Hex.Hex }) {
 
 	return {
 		block,
+		keyAuthorization,
+		keyTokenMetadata,
 		feeBreakdown,
 		knownCalls,
 		knownEvents,
