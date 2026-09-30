@@ -143,7 +143,8 @@ export function hasNonAdditiveVaultActivity(
 			event.parts.some(
 				(part) =>
 					part.type === 'action' &&
-					(part.value === 'Vault Deposit' || part.value === 'Vault Withdrawal'),
+					(part.value === 'Deposit to Earn' ||
+						part.value === 'Withdraw from Earn'),
 			),
 	)
 }
