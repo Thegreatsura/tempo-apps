@@ -20,6 +20,8 @@ import * as z from 'zod/mini'
 import { Amount } from '#comps/Amount'
 import { AccountCard } from '#comps/AccountCard'
 import { WalletActions } from '#comps/WalletActions'
+import { ValidatorFees } from '#comps/ValidatorFees'
+import { ValidatorCard } from '#comps/ValidatorCard'
 import { AddressCell } from '#comps/AddressCell'
 import { BalanceCell, TransferAmountCell } from '#comps/AmountCell'
 import { BreadcrumbsSlot } from '#comps/Breadcrumbs'
@@ -97,6 +99,7 @@ import {
 } from '#lib/og'
 import { withLoaderTiming } from '#lib/profiling'
 import { type HistoryResponse, historyQueryOptions } from '#lib/queries/account'
+import { validatorFeesQueryOptions } from '#lib/queries/validator-fees'
 import {
 	accountTransfersQueryOptions,
 	holdersQueryOptions,
@@ -518,12 +521,18 @@ function RouteComponent() {
 
 	// Build visible tabs based on address type
 	const isTip20 = Tip20.isTip20Address(address)
+	const { data: validatorFees } = useQuery({
+		...validatorFeesQueryOptions(address),
+		enabled: isMounted && !isTip20,
+	})
+	const hasUnclaimedFees = (validatorFees?.fees.length ?? 0) > 0
 	const visibleTabs: TabValue[] = React.useMemo(() => {
 		const tabs: TabValue[] = isZonePortal
 			? ['deposits', 'withdrawals', 'batches', 'transactions']
 			: ['transactions']
 		if (!isTip20) {
 			tabs.push('transfers', 'holdings')
+			if (hasUnclaimedFees) tabs.push('fees')
 		}
 		if (isToken) {
 			if (!tabs.includes('transfers')) tabs.push('transfers')
@@ -536,7 +545,7 @@ function RouteComponent() {
 			tabs.push('contract', 'interact')
 		}
 		return tabs
-	}, [isToken, isTip20, isContract, isZonePortal])
+	}, [isToken, isTip20, isContract, isZonePortal, hasUnclaimedFees])
 
 	const setActiveSection = React.useCallback(
 		(newIndex: number) => {
@@ -866,6 +875,7 @@ function AccountCardWithTimestamps(props: {
 				tokenName={tokenMetadata?.name}
 				virtualAddressParts={virtualAddressParts}
 			/>
+			{!isTip20 && <ValidatorCard address={address} />}
 			{isToken && (
 				<ClientOnly fallback={null}>
 					<WalletActions
@@ -2157,6 +2167,13 @@ function SectionsWrapper(props: {
 									: 'No transactions found.'
 							}
 						/>
+					),
+				}
+			case 'fees':
+				return {
+					title: 'Unclaimed Fees',
+					content: (
+						<ValidatorFees address={address} active={activeTab === 'fees'} />
 					),
 				}
 			case 'holdings': {

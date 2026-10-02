@@ -33,6 +33,7 @@ describe('address tab defaults', () => {
 	it.each([
 		'transactions',
 		'transfers',
+		'fees',
 		'holders',
 		'token',
 		'contract',
