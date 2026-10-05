@@ -4,12 +4,14 @@ import { Addresses } from 'viem/tempo'
 import { useReadContract } from 'wagmi'
 import { InfoCard } from '#comps/InfoCard'
 import { Abis } from '#lib/abis'
-import { useIsMounted } from '#lib/hooks'
+import { useCopy, useIsMounted } from '#lib/hooks'
+import CopyIcon from '~icons/lucide/copy'
 
 export function ValidatorCard(
 	props: ValidatorCard.Props,
 ): React.JSX.Element | null {
 	const isMounted = useIsMounted()
+	const { copy, notifying } = useCopy()
 	const { data: validator } = useReadContract({
 		address: Addresses.validatorV2,
 		abi: Abis.validatorConfigV2,
@@ -28,20 +30,33 @@ export function ValidatorCard(
 			title={<InfoCard.Title>Validator</InfoCard.Title>}
 			sections={[
 				{ label: 'Active', value: active ? 'Yes' : 'No' },
-				{ label: 'Index', value: validator.index.toString() },
 				<div key="recipient" className="flex flex-col gap-2 min-w-0">
-					<span className="text-tertiary">Fee recipient</span>
+					<div className="flex items-center gap-2 text-tertiary">
+						<span>Fee recipient</span>
+						<button
+							type="button"
+							onClick={() => copy(validator.feeRecipient)}
+							className="flex items-center gap-2 cursor-pointer press-down hover:text-primary"
+							aria-label={
+								notifying ? 'Fee recipient copied' : 'Copy fee recipient'
+							}
+							title="Copy fee recipient"
+						>
+							<CopyIcon className="size-3" />
+							{notifying && <span>copied</span>}
+						</button>
+					</div>
 					<Link
 						to="/address/$address"
 						params={{ address: validator.feeRecipient }}
 						search={{ tab: 'holdings' }}
-						className="type-card-data text-primary break-all max-w-[21ch] hover:underline"
+						className="font-mono copy-13 text-primary break-all leading-relaxed max-w-[32ch] hover:underline"
 					>
 						{validator.feeRecipient}
 					</Link>
 				</div>,
 				{
-					label: 'Added at height',
+					label: <span className="normal-case">Added at height</span>,
 					value: (
 						<Link
 							to="/block/$id"
@@ -52,20 +67,24 @@ export function ValidatorCard(
 						</Link>
 					),
 				},
-				{
-					label: 'Deactivated at height',
-					value: active ? (
-						<span title="Not deactivated">-</span>
-					) : (
-						<Link
-							to="/block/$id"
-							params={{ id: validator.deactivatedAtHeight.toString() }}
-							className="hover:underline break-all"
-						>
-							{validator.deactivatedAtHeight.toString()}
-						</Link>
-					),
-				},
+				...(!active
+					? [
+							{
+								label: (
+									<span className="normal-case">Deactivated at height</span>
+								),
+								value: (
+									<Link
+										to="/block/$id"
+										params={{ id: validator.deactivatedAtHeight.toString() }}
+										className="hover:underline break-all"
+									>
+										{validator.deactivatedAtHeight.toString()}
+									</Link>
+								),
+							},
+						]
+					: []),
 			]}
 		/>
 	)

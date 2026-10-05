@@ -3,24 +3,34 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ValidatorCard } from '#comps/ValidatorCard'
 
-const { readContract } = vi.hoisted(() => ({ readContract: vi.fn() }))
+const { readContract, copy, copyState } = vi.hoisted(() => ({
+	readContract: vi.fn(),
+	copy: vi.fn(),
+	copyState: { notifying: false },
+}))
 vi.mock('wagmi', () => ({ useReadContract: readContract }))
-vi.mock('#lib/hooks', () => ({ useIsMounted: () => true }))
+vi.mock('#lib/hooks', () => ({
+	useIsMounted: () => true,
+	useCopy: () => ({ copy, notifying: copyState.notifying }),
+}))
 vi.mock('@tanstack/react-router', () => ({
 	Link: ({
 		children,
 		to,
 		params,
 		search,
+		className,
 	}: {
 		children: React.ReactNode
 		to: string
 		params: Record<string, string>
 		search?: { tab: string }
+		className?: string
 	}) =>
 		createElement(
 			'a',
 			{
+				className,
 				href:
 					to.replace(/\$(\w+)/g, (_, key: string) => params[key] ?? '') +
 					(search ? `?tab=${search.tab}` : ''),
@@ -43,19 +53,46 @@ const validator = {
 const render = () =>
 	renderToStaticMarkup(createElement(ValidatorCard, { address }))
 
-beforeEach(() => readContract.mockReturnValue({ data: validator }))
+beforeEach(() => {
+	readContract.mockReturnValue({ data: validator })
+	copy.mockClear()
+	copyState.notifying = false
+})
 
 describe('validator address card', () => {
-	it('links the full fee recipient to holdings and preserves genesis index and height', () => {
+	it('copies the full fee recipient without navigating the address link', () => {
+		const html = render()
+		expect(html).toContain('aria-label="Copy fee recipient"')
+		const recipientSection = ValidatorCard({ address })?.props.sections[1]
+		const copyButton = recipientSection.props.children[0].props.children[1]
+		copyButton.props.onClick()
+		expect(copy).toHaveBeenCalledExactlyOnceWith(validator.feeRecipient)
+		expect(html).toContain(
+			`href="/address/${validator.feeRecipient}?tab=holdings"`,
+		)
+	})
+
+	it('confirms when the fee recipient was copied', () => {
+		copyState.notifying = true
+		const html = render()
+		expect(html).toContain('aria-label="Fee recipient copied"')
+		expect(html).toContain('>copied</span>')
+	})
+
+	it('links the full fee recipient to holdings, matches address typography and preserves genesis height', () => {
 		const html = render()
 		expect(html).toContain('>Yes<')
-		expect(html).toContain('>Index<')
+		expect(html).not.toContain('>Index<')
+		expect(html).toContain(
+			'font-mono copy-13 text-primary break-all leading-relaxed max-w-[32ch]',
+		)
+		expect(html).toContain('class="normal-case">Added at height</span>')
 		expect(html).toContain(
 			`href="/address/${validator.feeRecipient}?tab=holdings"`,
 		)
 		expect(html).toContain(`>${validator.feeRecipient}</a>`)
 		expect(html).toContain('href="/block/0"')
-		expect(html).toContain('title="Not deactivated">-</span>')
+		expect(html).not.toContain('Deactivated')
 		expect(readContract.mock.lastCall?.[0]).toMatchObject({
 			functionName: 'validatorByAddress',
 			args: [address],
@@ -73,7 +110,9 @@ describe('validator address card', () => {
 		})
 		const html = render()
 		expect(html).toContain('>No<')
-		expect(html).toContain('>15<')
+		expect(html).not.toContain('>Index<')
+		expect(html).not.toContain('>15<')
+		expect(html).toContain('class="normal-case">Deactivated at height</span>')
 		expect(html).toContain('href="/block/9007199254740993"')
 		expect(html).toContain('href="/block/9007199254740995"')
 	})
