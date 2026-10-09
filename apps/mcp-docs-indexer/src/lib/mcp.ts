@@ -67,6 +67,7 @@ type SourceIndexEntry = {
 	title: string
 	url: string
 	description?: string
+	section?: string
 }
 
 type LegacySearchOptions = {
@@ -102,8 +103,9 @@ const PAGE_CACHE_TTL_MS = 60_000
 const PAGE_CACHE_MAX_ENTRIES = 128
 const SOURCE_INDEX_CACHE_TTL_MS = 10 * 60_000
 const SOURCE_INDEX_CACHE_MAX_ENTRIES = 64
+const SECTION_LOOKUP_TIMEOUT_MS = 500
 const DEFAULT_MAX_PAGE_CHARS = 12_000
-const RESOURCE_INDEX_MAX_ENTRIES = 50
+const RESOURCE_INDEX_MAX_ENTRIES = 500
 const SOURCES_RESOURCE_URI = 'tempo-docs://sources'
 const READ_ONLY_TOOL_ANNOTATIONS = {
 	destructiveHint: false,
@@ -289,7 +291,7 @@ export async function handleMcp(
 				context.instance,
 				context.sources ?? [],
 			)
-			const formatted = formatResult(
+			const formatted = await formatResult(
 				result,
 				effectiveArgs,
 				context.sources ?? [],
@@ -324,7 +326,7 @@ Write an async arrow function in JavaScript that returns the result.
 Do not use TypeScript syntax, type annotations, interfaces, or generics.
 Do not define a named function and then call it.
 
-{{example}}`,
+Example: async () => { const found = await codemode.find_pages({ source: "viem", query: "sendTransaction" }); const page = await codemode.read_page({ source: "viem", url: found.result.pages[0].url, max_chars: 2000 }); return page.result.text; }`,
 	})
 }
 
@@ -332,7 +334,9 @@ function createReadOnlyDocsServer(
 	tools: Tool[],
 	context: McpContext,
 ): McpServer {
-	const docsTools = tools.filter((tool) => CODEMODE_TOOL_NAMES.has(tool.name))
+	const docsTools = tools
+		.filter((tool) => CODEMODE_TOOL_NAMES.has(tool.name))
+		.map(codemodeToolSchema)
 	const server = new McpServer(
 		{
 			name: 'tempo-docs-readonly',
@@ -347,6 +351,41 @@ function createReadOnlyDocsServer(
 		callLocalDocsTool(context, request.params.name, request.params.arguments),
 	)
 	return server
+}
+
+/**
+ * Codemode renders array-of-enum schemas as `"a" | "b"[]`, which TypeScript
+ * reads as `"a" | ("b"[])`. Describe the allowed values in prose instead; the
+ * tool handlers still validate them.
+ */
+function codemodeToolSchema(tool: Tool): Tool {
+	const properties = tool.inputSchema.properties ?? {}
+	return {
+		...tool,
+		inputSchema: {
+			...tool.inputSchema,
+			properties: Object.fromEntries(
+				Object.entries(properties).map(([name, schema]) => {
+					const property = schema as {
+						type?: string
+						description?: string
+						items?: { enum?: string[] }
+					}
+					const values = property.items?.enum
+					if (property.type !== 'array' || !values) return [name, schema]
+					return [
+						name,
+						{
+							...property,
+							description:
+								`${property.description ?? ''} One of: ${values.join(', ')}.`.trim(),
+							items: { type: 'string' },
+						},
+					]
+				}),
+			),
+		},
+	}
 }
 
 async function callLocalDocsTool(
@@ -457,6 +496,7 @@ async function handleFindPages(
 			.map(({ entry, score }) => ({
 				title: entry.title,
 				url: entry.url,
+				...(entry.section ? { section: entry.section } : {}),
 				score: Number(Math.min(0.99, score / 20).toFixed(4)),
 			}))
 		return toolResult(
@@ -489,7 +529,7 @@ async function handleReadPage(
 	}
 
 	try {
-		const text = await readCleanPage(pageUrl)
+		const text = await readCleanPage(markdownUrlFor(pageUrl, source))
 		const maxChars = maxPageCharsFor(args)
 		const truncated = text.length > maxChars
 		const resultText = pageTextFor(text, args, maxChars)
@@ -523,6 +563,16 @@ function resolvePageUrl(
 	if (!raw) return undefined
 
 	return resolveSourcePageUrl(raw, source.base)?.toString()
+}
+
+function markdownUrlFor(pageUrl: string, source: Source): string {
+	const page = new URL(pageUrl)
+	const base = new URL(source.base)
+	const prefix = base.pathname.replace(/\/+$/, '')
+	if (prefix && page.pathname.replace(/\/+$/, '') === prefix) {
+		return `${base.origin}${prefix}/index.md`
+	}
+	return toMarkdownUrl(pageUrl)
 }
 
 async function readCleanPage(pageUrl: string): Promise<string> {
@@ -759,7 +809,12 @@ async function localSourceSearch(
 	const chunks = (
 		await Promise.allSettled(
 			scored.map(async ({ entry, score }) =>
-				sourceIndexChunk(source, entry, await readCleanPage(entry.url), score),
+				sourceIndexChunk(
+					source,
+					entry,
+					await readCleanPage(markdownUrlFor(entry.url, source)),
+					score,
+				),
 			),
 		)
 	)
@@ -810,9 +865,24 @@ function cacheSourceIndex(key: string, entries: SourceIndexEntry[]): void {
 	if (oldestKey) sourceIndexCache.delete(oldestKey)
 }
 
+const CONTENTS_HEADING = /^(?:table of )?contents$/i
+
 function parseSourceIndex(body: string, base: string): SourceIndexEntry[] {
 	const entries = []
+	let section: string | undefined
+	let subsection: string | undefined
 	for (const line of body.split('\n')) {
+		const heading = line.match(/^(#{2,3})\s+(.+?)\s*$/)
+		if (heading) {
+			const [, level, label] = heading
+			if (level === '##') {
+				section = CONTENTS_HEADING.test(label) ? undefined : label
+				subsection = undefined
+			} else {
+				subsection = label
+			}
+			continue
+		}
 		const match =
 			line.match(/^\s*[-*]\s+\[([^\]]+)\]\(([^)]+)\)(?::\s*(.*))?/) ??
 			plainPathSourceIndexMatch(line)
@@ -821,10 +891,12 @@ function parseSourceIndex(body: string, base: string): SourceIndexEntry[] {
 		try {
 			const url = resolveSourcePageUrl(rawUrl, base)
 			if (!url) continue
+			const sectionLabel = [section, subsection].filter(Boolean).join(' / ')
 			entries.push({
 				title: title.trim(),
 				url: publicDocsUrl(url.toString()),
 				...(description?.trim() ? { description: description.trim() } : {}),
+				...(sectionLabel ? { section: sectionLabel } : {}),
 			})
 		} catch {
 			// Ignore invalid index entries.
@@ -856,9 +928,10 @@ function titleFromPath(path: string): string {
 
 function sourceEntryScore(entry: SourceIndexEntry, tokens: string[]): number {
 	if (tokens.length === 0) return 0
-	const haystack = `${entry.title} ${entry.description ?? ''} ${entry.url}`
-		.toLowerCase()
-		.replace(/[-_/]+/g, ' ')
+	const haystack =
+		`${entry.title} ${entry.description ?? ''} ${entry.section ?? ''} ${entry.url}`
+			.toLowerCase()
+			.replace(/[-_/]+/g, ' ')
 	let score = 0
 	for (const token of tokens) {
 		if (!haystack.includes(token)) continue
@@ -940,11 +1013,13 @@ function normalizeOptions(
 	}
 }
 
-function formatResult(
+async function formatResult(
 	result: AiSearchSearchResponse,
 	args: SearchArguments | undefined,
 	sources: Source[],
-): AiSearchSearchResponse | { search_query: string; chunks: unknown[] } {
+): Promise<
+	AiSearchSearchResponse | { search_query: string; chunks: unknown[] }
+> {
 	if (args?.include_raw === true) {
 		return {
 			...result,
@@ -955,13 +1030,15 @@ function formatResult(
 		}
 	}
 
+	const chunks = compactChunks(
+		distinctPageChunks(result.chunks, sources).slice(0, maxResultsFor(args)),
+		args,
+		sources,
+	)
+	await annotateChunkSections(chunks, sources)
 	return {
 		search_query: result.search_query,
-		chunks: compactChunks(
-			distinctPageChunks(result.chunks, sources).slice(0, maxResultsFor(args)),
-			args,
-			sources,
-		),
+		chunks,
 	}
 }
 
@@ -1014,12 +1091,21 @@ function pageIdentityForChunk(
 	}
 }
 
+type CompactChunk = {
+	score: number
+	source?: string
+	section?: string
+	url?: string
+	key?: string
+	text: string
+}
+
 function compactChunk(
 	chunk: SearchResultChunk,
 	args: SearchArguments | undefined,
 	sources: Source[],
 	maxChars = maxCharsPerChunkFor(args),
-) {
+): CompactChunk {
 	const source = sourceForChunk(chunk)
 	const url = urlForChunk(chunk, sources)
 	const text = compactText(chunk.text, args, maxChars)
@@ -1032,12 +1118,82 @@ function compactChunk(
 	}
 }
 
+/**
+ * Label compact chunks with the configured source that owns their URL and the
+ * docs navigation section from that source's index. Crawled pages carry no
+ * source metadata, so the URL is the only reliable link to the docs IA.
+ */
+async function annotateChunkSections(
+	chunks: CompactChunk[],
+	sources: Source[],
+): Promise<void> {
+	const owners = new Map<CompactChunk, Source>()
+	for (const chunk of chunks) {
+		const owner = chunk.url ? sourceForUrl(chunk.url, sources) : undefined
+		if (owner) owners.set(chunk, owner)
+	}
+	const sections = new Map<string, Map<string, string>>()
+	await Promise.all(
+		[...new Set(owners.values())].map(async (source) => {
+			try {
+				const entries = await readSourceIndexWithTimeout(source)
+				sections.set(
+					source.id,
+					new Map(
+						entries.flatMap((entry) =>
+							entry.section ? [[entry.url, entry.section] as const] : [],
+						),
+					),
+				)
+			} catch {
+				// Sections are optional context; keep the search result.
+			}
+		}),
+	)
+	for (const [chunk, source] of owners) {
+		chunk.source ??= source.id
+		const section = chunk.url
+			? sections.get(source.id)?.get(chunk.url)
+			: undefined
+		if (section) chunk.section = section
+	}
+}
+
+async function readSourceIndexWithTimeout(
+	source: Source,
+): Promise<SourceIndexEntry[]> {
+	let timeout: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			readSourceIndex(source),
+			new Promise<SourceIndexEntry[]>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error('section lookup timed out')),
+					SECTION_LOOKUP_TIMEOUT_MS,
+				)
+			}),
+		])
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
+
+/** The configured source whose origin and path prefix contain `url`. */
+function sourceForUrl(url: string, sources: Source[]): Source | undefined {
+	return sources.find((source) => {
+		if (!url.startsWith('https://') && !url.startsWith('http://')) return false
+		const resolved = resolveSourcePageUrl(url, source.base)
+		return resolved !== undefined && new URL(url).origin === resolved.origin
+	})
+}
+
 function urlForChunk(
 	chunk: SearchResultChunk,
 	sources: Source[],
 ): string | undefined {
 	const metadata = chunk.item.metadata ?? {}
 	if (typeof metadata.url === 'string') return publicDocsUrl(metadata.url)
+	if (/^https?:\/\//.test(chunk.item.key)) return publicDocsUrl(chunk.item.key)
 	return urlFromKey(chunk.item.key, sources)
 }
 
@@ -1484,7 +1640,8 @@ function toolSchemas(sources: Source[]): Tool[] {
 		},
 		{
 			name: 'find_pages',
-			description: 'Find page URLs from a source index.',
+			description:
+				'Find page URLs from a source index, including docs navigation sections when available.',
 			annotations: READ_ONLY_TOOL_ANNOTATIONS,
 			inputSchema: {
 				type: 'object',
@@ -1679,7 +1836,7 @@ async function readResource(uri: string, sources: Source[]) {
 			source,
 		)
 		if (!pageUrl) return undefined
-		const text = await readCleanPage(pageUrl)
+		const text = await readCleanPage(markdownUrlFor(pageUrl, source))
 		return [
 			{
 				uri,
@@ -1692,6 +1849,18 @@ async function readResource(uri: string, sources: Source[]) {
 		]
 	}
 	if (segments.length > 0) return undefined
+	let sections: string[] = []
+	try {
+		sections = [
+			...new Set(
+				(await readSourceIndex(source)).flatMap((entry) =>
+					entry.section ? [entry.section] : [],
+				),
+			),
+		]
+	} catch {
+		// Sections are optional context.
+	}
 	return [
 		{
 			uri,
@@ -1701,6 +1870,7 @@ async function readResource(uri: string, sources: Source[]) {
 				`Base URL: ${source.base}`,
 				`Index path: ${source.indexPath ?? '/llms.txt'}`,
 				source.description ? `Description: ${source.description}` : undefined,
+				sections.length > 0 ? `Sections: ${sections.join(', ')}` : undefined,
 				'',
 				'Search example:',
 				'```json',
@@ -1725,14 +1895,24 @@ function sourceIndexResourceText(
 	source: Source,
 	entries: SourceIndexEntry[],
 ): string {
+	const shown = entries.slice(0, RESOURCE_INDEX_MAX_ENTRIES)
+	const lines: string[] = []
+	let section: string | undefined
+	for (const entry of shown) {
+		if (entry.section !== section) {
+			lines.push('', `## ${entry.section ?? 'Other pages'}`)
+			section = entry.section
+		}
+		lines.push(`- [${entry.title}](${entry.url})`)
+	}
 	return [
 		`# ${source.id} docs page index`,
 		entries.length === 0
 			? 'No pages found in this source index.'
-			: entries
-					.slice(0, RESOURCE_INDEX_MAX_ENTRIES)
-					.map((entry) => `- [${entry.title}](${entry.url})`)
-					.join('\n'),
+			: lines.join('\n').trim(),
+		entries.length > shown.length
+			? `Showing ${shown.length} of ${entries.length} pages. Use \`find_pages\` with \`source: "${source.id}"\` to locate the rest.`
+			: undefined,
 	]
 		.filter(Boolean)
 		.join('\n')

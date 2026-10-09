@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Executor } from '@cloudflare/codemode'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { handleMcp } from './mcp.js'
@@ -29,6 +29,13 @@ const sources: Source[] = [
 		description: 'React Hooks for Ethereum / Tempo',
 	},
 ]
+
+beforeEach(() => {
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async () => new Response('not found', { status: 404 })),
+	)
+})
 
 afterEach(() => {
 	vi.unstubAllGlobals()
@@ -283,7 +290,7 @@ describe('handleMcp', () => {
 		expect(
 			body.result.tools.map((tool: { name: string }) => tool.name),
 		).toEqual(['search', 'find_pages', 'read_page', 'code'])
-		expect(body.result.tools[3].description).toContain('codemode.search')
+		expect(body.result.tools[3].description).toContain('codemode.find_pages')
 		expect(body.result.tools[3].annotations).toEqual({
 			destructiveHint: false,
 			idempotentHint: true,
@@ -1491,6 +1498,216 @@ describe('handleMcp', () => {
 		const readBody = await read?.json()
 		expect(readBody.result.contents[0].text).toContain('`viem`')
 		expect(readBody.result.contents[0].text).toContain('source')
+	})
+
+	it('exposes index sections and reports resource truncation', async () => {
+		const source: Source = {
+			id: 'sectioned-pages',
+			base: 'https://sectioned.example/docs',
+		}
+		const entries = Array.from(
+			{ length: 501 },
+			(_, i) => `- [Page ${i}](/page-${i}): Description`,
+		)
+		const fetcher = vi.fn(async (url: string) => {
+			if (url.endsWith('/llms.txt'))
+				return new Response(
+					['## Contents', '## Payments', '### Deposits', ...entries].join('\n'),
+				)
+			return new Response('# Docs root')
+		})
+		vi.stubGlobal('fetch', fetcher)
+		const call = async (method: string, params: Record<string, unknown>) => {
+			const res = await handleMcp(
+				new Request('https://mcp.tempo.xyz/', {
+					method: 'POST',
+					body: JSON.stringify({ jsonrpc: '2.0', id: method, method, params }),
+				}),
+				{
+					instance: instance(async () => ({ search_query: '', chunks: [] })),
+					sources: [source],
+				},
+			)
+			return res?.json()
+		}
+		const index = await call('resources/read', {
+			uri: 'tempo-docs://source/sectioned-pages/index',
+		})
+		const text = index.result.contents[0].text as string
+		expect(text).toContain('## Payments / Deposits')
+		expect(text).toContain('Showing 500 of 501 pages')
+		const found = await call('tools/call', {
+			name: 'find_pages',
+			arguments: { source: source.id, query: 'page 500' },
+		})
+		expect(
+			JSON.parse(found.result.content[0].text).result.pages[0].section,
+		).toBe('Payments / Deposits')
+		const bySection = await call('tools/call', {
+			name: 'find_pages',
+			arguments: { source: source.id, query: 'Payments' },
+		})
+		expect(
+			JSON.parse(bySection.result.content[0].text).result.pages,
+		).not.toHaveLength(0)
+		const root = await call('tools/call', {
+			name: 'read_page',
+			arguments: { source: source.id, path: '/' },
+		})
+		expect(JSON.parse(root.result.content[0].text).result.text).toBe(
+			'# Docs root',
+		)
+		expect(fetcher).toHaveBeenCalledWith(
+			'https://sectioned.example/docs/index.md',
+			expect.anything(),
+		)
+		const search = await handleMcp(
+			new Request('https://mcp.tempo.xyz/', {
+				method: 'POST',
+				body: JSON.stringify({
+					jsonrpc: '2.0',
+					id: 77,
+					method: 'tools/call',
+					params: {
+						name: 'search',
+						arguments: { source: source.id, query: 'page 0' },
+					},
+				}),
+			}),
+			{
+				instance: instance(async () => ({
+					search_query: 'page 0',
+					chunks: [
+						{
+							id: 'page-0',
+							type: 'text',
+							score: 1,
+							text: 'Page 0',
+							item: { key: 'https://sectioned.example/docs/page-0' },
+						},
+					],
+				})),
+				sources: [source],
+			},
+		)
+		expect((await textContent(search)).result.chunks[0]).toMatchObject({
+			source: source.id,
+			section: 'Payments / Deposits',
+		})
+	})
+
+	it('keeps search available when section enrichment stalls', async () => {
+		const source: Source = { id: 'slow-sections', base: 'https://slow.example' }
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise<Response>(() => {})),
+		)
+		const startedAt = performance.now()
+		const response = await handleMcp(
+			new Request('https://mcp.tempo.xyz/', {
+				method: 'POST',
+				body: JSON.stringify({
+					jsonrpc: '2.0',
+					id: 78,
+					method: 'tools/call',
+					params: {
+						name: 'search',
+						arguments: { source: source.id, query: 'page' },
+					},
+				}),
+			}),
+			{
+				instance: instance(async () => ({
+					search_query: 'page',
+					chunks: [
+						{
+							id: 'page',
+							type: 'text',
+							score: 1,
+							text: '# Page',
+							item: { key: 'https://slow.example/page' },
+						},
+					],
+				})),
+				sources: [source],
+			},
+		)
+		expect((await textContent(response)).result.chunks[0].text).toBe('# Page')
+		expect(performance.now() - startedAt).toBeLessThan(1500)
+	})
+
+	it('reads a mounted root from its index during local fallback', async () => {
+		const source: Source = {
+			id: 'root-fallback',
+			base: 'https://root.example/docs',
+		}
+		const fetcher = vi.fn(async (url: string) =>
+			url.endsWith('/llms.txt')
+				? new Response('- [Overview](/): Main docs')
+				: new Response('# Overview'),
+		)
+		vi.stubGlobal('fetch', fetcher)
+		const response = await handleMcp(
+			new Request('https://mcp.tempo.xyz/', {
+				method: 'POST',
+				body: JSON.stringify({
+					jsonrpc: '2.0',
+					id: 79,
+					method: 'tools/call',
+					params: {
+						name: 'search',
+						arguments: { source: source.id, query: 'Overview' },
+					},
+				}),
+			}),
+			{
+				instance: instance(async () => ({
+					search_query: 'Overview',
+					chunks: [],
+				})),
+				sources: [source],
+			},
+		)
+		expect((await textContent(response)).result.chunks[0].text).toBe(
+			'# Overview',
+		)
+		expect(fetcher).toHaveBeenCalledWith(
+			'https://root.example/docs/index.md',
+			expect.anything(),
+		)
+	})
+
+	it('separates unsectioned pages after a section', async () => {
+		const source: Source = {
+			id: 'mixed-sections',
+			base: 'https://mixed.example',
+		}
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response('## Payments\n- [A](/a)\n## Contents\n- [B](/b)'),
+			),
+		)
+		const response = await handleMcp(
+			new Request('https://mcp.tempo.xyz/', {
+				method: 'POST',
+				body: JSON.stringify({
+					jsonrpc: '2.0',
+					id: 80,
+					method: 'resources/read',
+					params: { uri: `tempo-docs://source/${source.id}/index` },
+				}),
+			}),
+			{
+				instance: instance(async () => ({ search_query: '', chunks: [] })),
+				sources: [source],
+			},
+		)
+		const body = await response?.json()
+		expect(body?.result?.contents?.[0]?.text).toContain(
+			'## Payments\n- [A](https://mixed.example/a)\n\n## Other pages\n- [B](https://mixed.example/b)',
+		)
 	})
 
 	it('exposes source indexes and exact pages as MCP resources', async () => {
